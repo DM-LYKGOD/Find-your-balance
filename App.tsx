@@ -317,21 +317,25 @@ const App: React.FC = () => {
              {/* Mobile Sidebar Drawer */}
             {isMobileMenuOpen && (
               <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setIsMobileMenuOpen(false)}>
-                <div className="bg-white dark:bg-zinc-900 w-64 h-full p-4 paper-texture shadow-2xl" onClick={e => e.stopPropagation()}>
-                   <div className="flex justify-end mb-4">
-                     <button onClick={() => setIsMobileMenuOpen(false)} className="cursor-pointer"><X className="w-6 h-6" /></button>
+                <div className="bg-white dark:bg-zinc-900 w-72 h-full p-4 paper-texture shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+                   <div className="flex justify-end mb-2">
+                     <button onClick={() => setIsMobileMenuOpen(false)} className="cursor-pointer p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                       <X className="w-5 h-5" />
+                     </button>
                    </div>
-                   <Sidebar 
-                      currentView={currentView} 
-                      onChangeView={(v) => { setCurrentView(v); setIsMobileMenuOpen(false); }}
-                      isDark={isDark}
-                      toggleTheme={toggleTheme}
-                      userName={data.user.name}
-                      onLogout={handleLogout}
-                      onCycleTheme={cycleBackground}
-                      data={data}
-                      onImportData={handleImportData}
-                    />
+                   <div className="flex-1 overflow-y-auto">
+                     <Sidebar 
+                        currentView={currentView} 
+                        onChangeView={(v) => { setCurrentView(v); setIsMobileMenuOpen(false); }}
+                        isDark={isDark}
+                        toggleTheme={toggleTheme}
+                        userName={data.user.name}
+                        onLogout={() => { setIsMobileMenuOpen(false); handleLogout(); }}
+                        onCycleTheme={cycleBackground}
+                        data={data}
+                        onImportData={handleImportData}
+                      />
+                   </div>
                 </div>
               </div>
             )}
