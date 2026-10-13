@@ -7,8 +7,19 @@ import Wellness from './views/Wellness';
 import Overview from './views/Overview';
 import Growth from './views/Growth';
 import Login from './components/Login';
-import { loadData, saveData, toggleHabitForDate, updateDayLog } from './services/storage';
-import { initGoogleAuth, signInToGoogle, dbLogin, dbSignup, dbSave, isGoogleAuthorized } from './services/sheets';
+import { 
+  loadData, 
+  saveData, 
+  toggleHabitForDate, 
+  updateDayLog,
+  loadSession,
+  saveSession,
+  clearSession,
+  localSignup,
+  localLogin,
+  localGuestLogin
+} from './services/storage';
+import { initGoogleAuth, dbLogin, dbSignup, dbSave, isGoogleAuthorized } from './services/sheets';
 import { Image, X } from 'lucide-react';
 
 // Cool Blue & White Backgrounds
@@ -33,12 +44,8 @@ const App: React.FC = () => {
   
   // Cloud / Auth State
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [isGoogleReady, setIsGoogleReady] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isProcessingLogin, setIsProcessingLogin] = useState(false);
-  
-  // Stored credentials to retry login after google popup
-  const pendingLoginRef = useRef<{name: string, email: string, pass: string, isSignUp: boolean} | null>(null);
 
   // Debounce ref for saving
   const saveTimeoutRef = useRef<number | null>(null);
@@ -54,23 +61,27 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Initialize Google Auth on Mount
+  // Restore Active User Session on Mount
   useEffect(() => {
-    const handleAuthCallback = (success: boolean, msg?: string) => {
-      if (success) {
-        setIsGoogleReady(true);
-        // If we were waiting for auth to complete a login, do it now
-        if (pendingLoginRef.current) {
-          performDbAction(pendingLoginRef.current);
-        }
-      } else {
-        console.warn("Google Auth failed or closed", msg);
-        setIsProcessingLogin(false);
-        setLoginError("Google Connection Failed. Please try again.");
-      }
-    };
+    const existingSession = loadSession();
+    if (existingSession) {
+      setUserEmail(existingSession.email);
+      const userSavedData = loadData(existingSession.email);
+      setData(userSavedData);
+      setIsLoggedIn(true);
+    }
+  }, []);
 
-    initGoogleAuth(handleAuthCallback);
+  // Safe Google Auth check in background (non-blocking)
+  useEffect(() => {
+    initGoogleAuth((success, msg) => {
+      if (success) {
+        console.info("Google Cloud Sync connected.");
+      } else {
+        // Safe fallback - offline/local persistence is active
+        console.info("Running in offline-first mode:", msg);
+      }
+    });
   }, []);
 
   const toggleTheme = () => {
@@ -85,19 +96,21 @@ const App: React.FC = () => {
     }
   };
 
-  // Main Data Persistence Effect (Local + Cloud)
+  // Main Data Persistence Effect (Local + Optional Cloud)
   useEffect(() => {
-    // 1. Save locally immediately
-    saveData(data);
+    if (isLoggedIn) {
+      // 1. Save locally with active user isolation
+      saveData(data, userEmail || undefined);
 
-    // 2. Save to cloud (debounced) if logged in
-    if (isLoggedIn && userEmail && isGoogleAuthorized()) {
-      if (saveTimeoutRef.current) {
-        window.clearTimeout(saveTimeoutRef.current);
+      // 2. Save to Google Sheets if user connected Google OAuth
+      if (userEmail && isGoogleAuthorized()) {
+        if (saveTimeoutRef.current) {
+          window.clearTimeout(saveTimeoutRef.current);
+        }
+        saveTimeoutRef.current = window.setTimeout(() => {
+          dbSave(userEmail, data);
+        }, 2000);
       }
-      saveTimeoutRef.current = window.setTimeout(() => {
-        dbSave(userEmail, data);
-      }, 2000); // 2 second delay to avoid hammering API
     }
   }, [data, isLoggedIn, userEmail]);
 
@@ -147,67 +160,86 @@ const App: React.FC = () => {
 
   // --- Auth Flow ---
 
-  const performDbAction = async (creds: {name: string, email: string, pass: string, isSignUp: boolean}) => {
-    const { name, email, pass, isSignUp } = creds;
-    
-    if (isSignUp) {
-      // 1. Create Row
-      const newData = { ...data, user: { ...data.user, name } };
-      const res = await dbSignup(email, pass, name, newData);
-      if (res.success) {
-        setUserEmail(email);
-        setData(newData);
-        setIsLoggedIn(true);
-        setLoginError(null);
-      } else {
-        setLoginError(res.message || "Signup failed. Email might exist.");
-      }
-    } else {
-      // 2. Login & Fetch
-      const res = await dbLogin(email, pass);
-      if (res.success && res.data) {
-        setUserEmail(email);
-        setData(res.data);
-        setIsLoggedIn(true);
-        setLoginError(null);
-      } else {
-        setLoginError(res.message || "Login failed. Check credentials.");
-      }
-    }
-    
-    setIsProcessingLogin(false);
-    pendingLoginRef.current = null;
-  };
-
   const handleAppLogin = async (name: string, email: string, pass: string, isSignUp: boolean) => {
-    if (!email || !pass) {
-      setLoginError("Please enter email and password.");
+    const cleanEmail = email.trim();
+    const cleanPass = pass.trim();
+
+    if (!cleanEmail || !cleanPass) {
+      setLoginError("Please enter both email and password.");
       return;
     }
 
     setLoginError(null);
     setIsProcessingLogin(true);
 
-    // If we are NOT authorized yet, we must trigger the popup first
-    if (!isGoogleAuthorized()) {
-       pendingLoginRef.current = { name, email, pass, isSignUp };
-       signInToGoogle(); // This will eventually trigger the useEffect callback
-    } else {
-       // Already authorized, proceed immediately
-       performDbAction({ name, email, pass, isSignUp });
+    try {
+      if (isSignUp) {
+        const res = localSignup(cleanEmail, cleanPass, name, data);
+        if (res.success) {
+          setUserEmail(cleanEmail.toLowerCase());
+          setData(res.data);
+          setIsLoggedIn(true);
+          setLoginError(null);
+
+          // If Google Cloud Sync is authorized, mirror in background
+          if (isGoogleAuthorized()) {
+            dbSignup(cleanEmail.toLowerCase(), cleanPass, name || cleanEmail, res.data).catch(console.warn);
+          }
+        } else {
+          setLoginError(res.message || "Failed to create account. Please try again.");
+        }
+      } else {
+        const res = localLogin(cleanEmail, cleanPass);
+        if (res.success && res.data) {
+          setUserEmail(cleanEmail.toLowerCase());
+          setData(res.data);
+          setIsLoggedIn(true);
+          setLoginError(null);
+        } else {
+          // Fallback check against Google Sheets if authorized
+          if (isGoogleAuthorized()) {
+            const cloudRes = await dbLogin(cleanEmail, cleanPass);
+            if (cloudRes.success && cloudRes.data) {
+              setUserEmail(cleanEmail.toLowerCase());
+              setData(cloudRes.data);
+              setIsLoggedIn(true);
+              setLoginError(null);
+              saveData(cloudRes.data, cleanEmail.toLowerCase());
+              saveSession({ email: cleanEmail.toLowerCase(), name: cloudRes.name || cloudRes.data.user.name });
+              return;
+            }
+          }
+          setLoginError(res.message || "Login failed. Please check your credentials.");
+        }
+      }
+    } catch (err: any) {
+      console.error("Auth error", err);
+      setLoginError(err.message || "An unexpected error occurred during authentication.");
+    } finally {
+      setIsProcessingLogin(false);
     }
   };
 
+  const handleGuestLogin = () => {
+    const res = localGuestLogin(data);
+    setUserEmail('guest@balance.local');
+    setData(res.data);
+    setIsLoggedIn(true);
+    setLoginError(null);
+  };
+
   const handleLogout = () => {
+    clearSession();
     setIsLoggedIn(false);
     setUserEmail(null);
+    setLoginError(null);
     setCurrentView('overview');
     setSelectedDate(new Date());
   };
 
   const handleImportData = (newData: AppData) => {
     setData(newData);
-    saveData(newData);
+    saveData(newData, userEmail || undefined);
   };
 
   const renderView = () => {
@@ -258,6 +290,7 @@ const App: React.FC = () => {
         {!isLoggedIn ? (
            <Login 
              onLogin={handleAppLogin} 
+             onGuestLogin={handleGuestLogin}
              isLoading={isProcessingLogin}
              error={loginError}
            />
@@ -267,7 +300,8 @@ const App: React.FC = () => {
             {/* Theme Toggle Floating Button */}
             <button 
               onClick={cycleBackground}
-              className="fixed top-4 right-4 z-50 p-3 bg-white/80 dark:bg-zinc-800/80 backdrop-blur rounded-full shadow-lg hover:scale-110 transition-transform text-zinc-600 dark:text-zinc-300 md:hidden"
+              className="fixed top-4 right-4 z-50 p-3 bg-white/80 dark:bg-zinc-800/80 backdrop-blur rounded-full shadow-lg hover:scale-110 transition-transform text-zinc-600 dark:text-zinc-300 md:hidden cursor-pointer"
+              title="Change Background"
             >
               <Image className="w-5 h-5" />
             </button>
@@ -275,7 +309,7 @@ const App: React.FC = () => {
             {/* Mobile Menu Toggle */}
              <button 
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden fixed top-4 left-4 z-50 p-3 bg-white/80 dark:bg-zinc-800/80 backdrop-blur rounded-full shadow-lg text-zinc-600"
+              className="md:hidden fixed top-4 left-4 z-50 p-3 bg-white/80 dark:bg-zinc-800/80 backdrop-blur rounded-full shadow-lg text-zinc-600 cursor-pointer"
             >
               <span className="font-handwriting font-bold text-2xl">Menu</span>
             </button>
@@ -285,7 +319,7 @@ const App: React.FC = () => {
               <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setIsMobileMenuOpen(false)}>
                 <div className="bg-white dark:bg-zinc-900 w-64 h-full p-4 paper-texture shadow-2xl" onClick={e => e.stopPropagation()}>
                    <div className="flex justify-end mb-4">
-                     <button onClick={() => setIsMobileMenuOpen(false)}><X className="w-6 h-6" /></button>
+                     <button onClick={() => setIsMobileMenuOpen(false)} className="cursor-pointer"><X className="w-6 h-6" /></button>
                    </div>
                    <Sidebar 
                       currentView={currentView} 

@@ -49,6 +49,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     fileInputRef.current?.click();
   };
 
+  const [notification, setNotification] = React.useState<string | null>(null);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileReader = new FileReader();
     if (e.target.files && e.target.files[0]) {
@@ -60,14 +62,17 @@ const Sidebar: React.FC<SidebarProps> = ({
             // Basic validation check
             if (parsedData.tasks && parsedData.user) {
               onImportData(parsedData);
-              alert("Journal restored successfully!");
+              setNotification("Journal restored successfully!");
+              setTimeout(() => setNotification(null), 3000);
             } else {
-              alert("Invalid file format.");
+              setNotification("Invalid file format.");
+              setTimeout(() => setNotification(null), 3000);
             }
           }
         } catch (error) {
           console.error(error);
-          alert("Error parsing backup file.");
+          setNotification("Error parsing backup file.");
+          setTimeout(() => setNotification(null), 3000);
         }
       };
     }
@@ -125,6 +130,12 @@ const Sidebar: React.FC<SidebarProps> = ({
       {/* Footer Actions */}
       <div className="mt-auto space-y-3 pt-6 border-t-2 border-dashed border-zinc-200 dark:border-zinc-700">
         
+        {notification && (
+          <div className="p-2 text-xs text-center rounded-lg bg-lavender-100 dark:bg-lavender-900/40 text-lavender-700 dark:text-lavender-300 font-marker">
+            {notification}
+          </div>
+        )}
+
         {/* Backup Controls */}
         <div className="grid grid-cols-2 gap-2 mb-2">
           <button 

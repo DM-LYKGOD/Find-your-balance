@@ -53,10 +53,12 @@ Built with a handwritten aesthetic, soothing ambient backgrounds, and an AI-powe
 * **Dynamic Ambient Backgrounds:** Cycle through 7 beautiful visual backdrops (Marble, Clouds, Ocean, Botanical, Sunset, White Desk, Frost, and Minimal).
 * **Dark Mode Support:** Seamless toggle between light and dark paper modes.
 
-### 💾 8. Local-First & Cloud Synchronization
-* **Local-First Privacy:** Data is stored locally in `localStorage` by default with instant auto-save.
-* **JSON Backup & Restore:** Export and import full journal backups at any time.
-* **Optional Cloud Sync:** Optional Google Sheets backend integration via Google OAuth (Google Identity Services) for seamless multi-device persistence.
+### 💾 8. Local-First Authentication & Cloud Synchronization
+* **Private Local Profiles:** Create and sign in with email/password accounts stored directly in browser storage with instant session auto-restore on refresh.
+* **Instant Demo & Guest Mode:** 1-click Demo login (`demo@balance.app`) or "Explore as Guest" for immediate, password-free journal access.
+* **Local-First Privacy:** All tasks, habits, and journals are saved locally with user account data isolation.
+* **JSON Backup & Restore:** Export and restore full journal backups at any time.
+* **Optional Cloud Sync:** Optional Google Sheets backend integration via Google OAuth (Google Identity Services) for multi-device sync when configured.
 
 ---
 

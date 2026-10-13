@@ -1,18 +1,28 @@
 import { AppData } from '../types';
 
 // --- CONFIGURATION ---
-const CLIENT_ID = 'debapratim1';
+// Set to a valid Google OAuth Client ID (ending in .apps.googleusercontent.com) to enable cloud sync
+const CLIENT_ID = '';
 const SPREADSHEET_ID = '190UEY3iBtxxAHibi0NUGI8IDu_2Jt5oeBBO_j_mSnZw';
 const SHEET_NAME = 'Sheet1'; 
 
-let tokenClient: any;
+let tokenClient: any = null;
 let accessToken: string | null = null;
 
-// Initialize Google OAuth Client
+export const isGoogleConfigured = (): boolean => {
+  return typeof CLIENT_ID === 'string' && CLIENT_ID.endsWith('.apps.googleusercontent.com');
+};
+
+// Initialize Google OAuth Client safely
 export const initGoogleAuth = (callback: (success: boolean, error?: string) => void) => {
-  if (!(window as any).google) {
-    console.error("Google Identity Services not loaded");
-    callback(false, "Google API not loaded");
+  if (!isGoogleConfigured()) {
+    // Gracefully report unconfigured without throwing or breaking local auth
+    callback(false, "Google OAuth Client ID is not configured. Local persistence will be used.");
+    return;
+  }
+
+  if (typeof window === 'undefined' || !(window as any).google?.accounts?.oauth2) {
+    callback(false, "Google Identity Services not loaded");
     return;
   }
 
@@ -29,23 +39,25 @@ export const initGoogleAuth = (callback: (success: boolean, error?: string) => v
         }
       },
       error_callback: (err: any) => {
-        console.error("Google Auth Error:", err);
-        callback(false, err.message || "Auth Error");
+        console.warn("Google Auth Warning:", err);
+        callback(false, err?.message || "Auth Error");
       }
     });
-    console.log("Google Auth Initialized with ID:", CLIENT_ID);
   } catch (e: any) {
-    console.error("Error initializing Google Auth", e);
-    callback(false, e.message);
+    console.warn("Notice: Google Auth initialization skipped", e);
+    callback(false, e?.message);
   }
 };
 
 export const signInToGoogle = () => {
-  if (tokenClient) {
-    // Prompt the user for permission
-    tokenClient.requestAccessToken();
+  if (tokenClient && isGoogleConfigured()) {
+    try {
+      tokenClient.requestAccessToken();
+    } catch (e) {
+      console.warn("Failed to request Google access token", e);
+    }
   } else {
-    console.error("Token client not initialized");
+    console.info("Google OAuth is not configured with a valid client ID. Local storage is active.");
   }
 };
 
@@ -60,7 +72,7 @@ const fetchUserDirectory = async () => {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err.error?.message || "Failed to fetch directory");
   }
 
@@ -69,25 +81,24 @@ const fetchUserDirectory = async () => {
 };
 
 export const dbLogin = async (email: string, password: string): Promise<{ success: boolean; data?: AppData; name?: string; message?: string }> => {
+  if (!isGoogleConfigured() || !accessToken) {
+    return { success: false, message: "Google Cloud Sync not active." };
+  }
+
   try {
     const rows = await fetchUserDirectory();
-    // Find row index (0-based) where Column A (index 0) matches email
-    const rowIndex = rows.findIndex((row: string[]) => row[0] === email);
+    const rowIndex = rows.findIndex((row: string[]) => row[0]?.toLowerCase() === email.toLowerCase());
     
     if (rowIndex === -1) {
       return { success: false, message: "User not found in Sheet." };
     }
 
     const storedPassword = rows[rowIndex][1];
-    
-    // Check password (simple check)
     if (storedPassword !== password) {
       return { success: false, message: "Invalid password." };
     }
 
     const name = rows[rowIndex][2];
-
-    // Fetch the Data Column (D) for this specific row
     const range = `${SHEET_NAME}!D${rowIndex + 1}`;
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -98,12 +109,11 @@ export const dbLogin = async (email: string, password: string): Promise<{ succes
       try {
         appData = JSON.parse(json.values[0][0]);
       } catch (e) {
-        console.error("Failed to parse user data", e);
+        console.error("Failed to parse user data from sheet", e);
       }
     }
 
     return { success: true, data: appData, name };
-
   } catch (e: any) {
     console.error("DB Login Error", e);
     return { success: false, message: e.message || "Connection error." };
@@ -111,13 +121,16 @@ export const dbLogin = async (email: string, password: string): Promise<{ succes
 };
 
 export const dbSignup = async (email: string, password: string, name: string, initialData: AppData): Promise<{ success: boolean; message?: string }> => {
+  if (!isGoogleConfigured() || !accessToken) {
+    return { success: false, message: "Google Cloud Sync not active." };
+  }
+
   try {
     const rows = await fetchUserDirectory();
-    if (rows && rows.find((row: string[]) => row[0] === email)) {
+    if (rows && rows.find((row: string[]) => row[0]?.toLowerCase() === email.toLowerCase())) {
       return { success: false, message: "Email already exists in Sheet." };
     }
 
-    // Append new row: Email | Password | Name | JSON_Data
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${SHEET_NAME}!A:D:append?valueInputOption=RAW`;
     const body = {
       values: [
@@ -137,11 +150,9 @@ export const dbSignup = async (email: string, password: string, name: string, in
     if (res.ok) {
       return { success: true };
     } else {
-      const err = await res.json();
-      console.error("Signup API Error", err);
+      const err = await res.json().catch(() => ({}));
       return { success: false, message: err.error?.message || "Failed to create entry." };
     }
-
   } catch (e: any) {
     console.error("DB Signup Error", e);
     return { success: false, message: e.message || "Connection error." };
@@ -149,18 +160,16 @@ export const dbSignup = async (email: string, password: string, name: string, in
 };
 
 export const dbSave = async (email: string, data: AppData) => {
-  if (!accessToken) return;
+  if (!accessToken || !isGoogleConfigured()) return;
 
   try {
     const rows = await fetchUserDirectory();
-    const rowIndex = rows.findIndex((row: string[]) => row[0] === email);
+    const rowIndex = rows.findIndex((row: string[]) => row[0]?.toLowerCase() === email.toLowerCase());
 
     if (rowIndex === -1) {
-      console.error("User row not found for saving");
       return;
     }
 
-    // Update Column D for that row
     const range = `${SHEET_NAME}!D${rowIndex + 1}`;
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}?valueInputOption=RAW`;
     
@@ -174,10 +183,7 @@ export const dbSave = async (email: string, data: AppData) => {
         values: [[JSON.stringify(data)]]
       }),
     });
-    
-    console.log("Synced to Sheet DB");
-
   } catch (e) {
-    console.error("DB Save Error", e);
+    console.warn("DB Save warning", e);
   }
 };
